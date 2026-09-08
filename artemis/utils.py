@@ -1,9 +1,12 @@
 import logging
+import os
+import shutil
 import subprocess
 import time
 import urllib.parse
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Generator, List, Optional, Tuple
 
 from whoisdomain import Domain, WhoisQuotaExceeded  # type: ignore
 from whoisdomain import query as whois_query
@@ -25,6 +28,39 @@ class CalledProcessErrorWithMessage(subprocess.CalledProcessError):
 
     def __repr__(self) -> str:
         return self.message
+
+
+@contextmanager
+def directory_backup(*directories: str, logger: logging.Logger) -> Generator[None, None, None]:
+    """Back up directories before a risky operation and restore them on failure.
+
+    Usage:
+        with directory_backup("/root/nuclei-templates/", logger=self.log):
+            subprocess.check_call(["nuclei", "-update-templates"])
+    """
+    backups: list[tuple[str, str]] = []
+    for directory in directories:
+        backup = directory.rstrip("/") + ".bak/"
+        if os.path.exists(backup):
+            shutil.rmtree(backup, ignore_errors=True)
+        if os.path.exists(directory):
+            shutil.copytree(directory, backup)
+            backups.append((directory, backup))
+
+    try:
+        yield
+    except Exception:
+        logger.error("Operation failed, restoring backups for: %s", ", ".join(directories))
+        for directory, backup in backups:
+            if os.path.exists(backup):
+                if os.path.exists(directory):
+                    shutil.rmtree(directory, ignore_errors=True)
+                shutil.copytree(backup, directory)
+        raise
+    finally:
+        for _, backup in backups:
+            if os.path.exists(backup):
+                shutil.rmtree(backup, ignore_errors=True)
 
 
 def check_output_log_on_error_with_stderr(
@@ -55,21 +91,13 @@ def check_output_log_on_error(command: List[str], logger: logging.Logger, **kwar
     return stdout
 
 
-def perform_whois_or_sleep(domain: str, logger: logging.Logger) -> Optional[Domain]:
+def perform_whois(domain: str, logger: logging.Logger) -> Optional[Domain]:
     try:
         domain_data = whois_query(domain=domain)
-        logger.info(
-            "Successful whois query for %s expiry=%s", domain, domain_data.expiration_date if domain_data else None
-        )
     except WhoisQuotaExceeded:
-        logger.info("Quota exceeded for whois query for %s, sleeping 24 hours", domain)
-        time.sleep(24 * 60 * 60)
-        domain_data = whois_query(domain=domain)
-        logger.info(
-            "Successful whois query for %s after retry expiry=%s",
-            domain,
-            domain_data.expiration_date if domain_data else None,
-        )
+        logger.exception("WhoisQuotaExceeded for query for %s")
+        raise
+    logger.info("Successful whois query for %s expiry=%s", domain, domain_data.expiration_date if domain_data else None)
     return domain_data
 
 

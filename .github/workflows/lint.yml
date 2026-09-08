@@ -9,9 +9,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
       - name: Set up Python 3.11
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
       - name: Install dependencies
@@ -19,4 +19,4 @@ jobs:
           python -m pip install --upgrade pip
           pip install pre-commit==3.5.0
       - name: Run pre-commit
-        run: pre-commit run --all-files
+        run: pre-commit run --all-files --show-diff-on-failure

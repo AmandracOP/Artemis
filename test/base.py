@@ -3,7 +3,7 @@ import tempfile
 import urllib
 from pathlib import Path
 from typing import Any, Dict, List
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from jinja2 import BaseLoader, Environment, StrictUndefined, Template
 from karton.core import Task
@@ -46,6 +46,10 @@ class ArtemisModuleTestCase(KartonTestCase):
             config=ConfigMock(), backend=KartonBackendMockWithRedis(), db=self.mock_db
         )
 
+        self.wayback_patch = patch("artemis.crawling._fetch_wayback_parameters", return_value=())
+        self.wayback_patch.start()
+        self.addCleanup(self.wayback_patch.stop)
+
 
 class BaseReportingTest(ArtemisModuleTestCase):
     @staticmethod
@@ -86,9 +90,13 @@ class BaseReportingTest(ArtemisModuleTestCase):
             "result": call.kwargs["data"],
         }
 
-    def obtain_http_task_result(self, receiver: str, host: str, port: int = 80) -> Dict[str, Any]:
+    def obtain_http_task_result(
+        self, receiver: str, host: str, port: int = 80, filter: dict[str, TaskType | Service] | None = None
+    ) -> Dict[str, Any]:
+        if filter is None:
+            filter = {"type": TaskType.SERVICE, "service": Service.HTTP}
         task = Task(
-            {"type": TaskType.SERVICE, "service": Service.HTTP},
+            filter,
             payload={"host": host, "port": port},
             payload_persistent={"original_domain": host},
         )

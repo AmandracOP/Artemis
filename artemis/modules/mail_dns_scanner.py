@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 import dataclasses
+import json
 import os
 from typing import List, Optional
 
 import dns.name
 import dns.resolver
 from karton.core import Task
-from libmailgoose.scan import DomainScanResult as SPFDMARCScanResult
+from libmailgoose.scan import DomainScanResult as SPFDMARCSSLScanResult
 from libmailgoose.scan import ScanningException, scan_domain
 from publicsuffixlist import PublicSuffixList
 
@@ -14,9 +15,6 @@ from artemis import load_risk_class
 from artemis.binds import TaskStatus, TaskType
 from artemis.domains import is_main_domain
 from artemis.module_base import ArtemisBase
-from artemis.modules.base.runtime_configuration_registry import (
-    RuntimeConfigurationRegistry,
-)
 from artemis.modules.runtime_configuration.mail_dns_scanner_configuration import (
     MailDNSScannerConfiguration,
 )
@@ -27,7 +25,7 @@ PUBLIC_SUFFIX_LIST = PublicSuffixList()
 
 @dataclasses.dataclass
 class MailDNSScannerResult:
-    spf_dmarc_scan_result: Optional[SPFDMARCScanResult] = None
+    spf_dmarc_scan_result: Optional[SPFDMARCSSLScanResult] = None
 
 
 @load_risk_class.load_risk_class(load_risk_class.LoadRiskClass.LOW)
@@ -42,6 +40,32 @@ class MailDNSScanner(ArtemisBase):
     def get_default_configuration(self) -> MailDNSScannerConfiguration:
         return MailDNSScannerConfiguration()
 
+    def get_runtime_configuration(self, task: Task) -> MailDNSScannerConfiguration:
+        configuration = self.get_default_configuration()
+
+        config_dict = task.payload_persistent.get("module_runtime_configurations", {}).get(self.identity)
+        if config_dict is None:
+            return configuration
+
+        try:
+            configuration = MailDNSScannerConfiguration.deserialize(config_dict)
+            if not configuration.validate():
+                raise ValueError(f"Invalid configuration for module {self.identity}")
+        except (KeyError, TypeError, ValueError) as exc:
+            self.log.warning(f"Failed to load configuration from task payload: {exc}")
+            return self.get_default_configuration()
+        return configuration
+
+    def get_batch_group_key(self, task: Task) -> str | None:
+        configuration = self.get_runtime_configuration(task)
+        return json.dumps(
+            {
+                "report_warnings": configuration.report_warnings,
+                "requests_per_second_override": self._get_requests_per_second_batch_key(task),
+            },
+            sort_keys=True,
+        )
+
     @staticmethod
     def _filter_warnings(warnings: List[str]) -> List[str]:
         return [warning for warning in warnings if dns.resolver.LifetimeTimeout.msg[:-1] not in warning]
@@ -50,6 +74,7 @@ class MailDNSScanner(ArtemisBase):
         result = MailDNSScannerResult()
 
         has_mx_records = False
+        is_running_tests = "RUNNING_TESTS" in os.environ
 
         # Try to find an SMTP for current domain or for the private suffix domain - let's treat a domain
         # as parked if we don't see a MX record on either of them, as some DMARC checks are performed
@@ -66,6 +91,9 @@ class MailDNSScanner(ArtemisBase):
         except dns.resolver.NoAnswer:
             pass
 
+        if is_running_tests:
+            has_mx_records = True
+
         try:
             # Ignore_void_dns_lookups is set because:
             # - the checkdmarc check is buggy and sometimes counts the void DNS lookups wrongly,
@@ -77,6 +105,10 @@ class MailDNSScanner(ArtemisBase):
                 dkim_domain=None,
                 parked=not has_mx_records,
                 ignore_void_dns_lookups=True,
+                # for tests, the scanned hosts don't have MX records. For production usage, if a host
+                # doesn't have an MX record, it's probably not meant to support e-mail so let's not scan
+                # it.
+                fallback_to_hostname_as_mx_in_ssl_check=is_running_tests,
             )
         except ScanningException:
             self.log.exception("Unable to check domain %s", domain)
@@ -149,17 +181,21 @@ class MailDNSScanner(ArtemisBase):
             return
 
         if current_task.get_payload("mail_domain"):
-            self.db.save_task_result(task=current_task, status=TaskStatus.OK)
+            self.save_task_result(task=current_task, status=TaskStatus.OK)
             return
 
         domain = current_task.get_payload(TaskType.DOMAIN)
         result = self.scan(current_task, domain)
+        configuration = self.get_runtime_configuration(current_task)
 
-        if not self.configuration.report_warnings:  # type: ignore
+        if not configuration.report_warnings:
             if result.spf_dmarc_scan_result and result.spf_dmarc_scan_result.spf:
                 result.spf_dmarc_scan_result.spf.warnings = []
             if result.spf_dmarc_scan_result and result.spf_dmarc_scan_result.dmarc:
                 result.spf_dmarc_scan_result.dmarc.warnings = []
+            if result.spf_dmarc_scan_result and result.spf_dmarc_scan_result.ssl:
+                for item in result.spf_dmarc_scan_result.ssl.results:
+                    item.warning = None
 
         status_reasons: List[str] = []
         if result.spf_dmarc_scan_result and result.spf_dmarc_scan_result.spf:
@@ -175,6 +211,12 @@ class MailDNSScanner(ArtemisBase):
             status_reasons.extend(result.spf_dmarc_scan_result.dmarc.errors)
             status_reasons.extend(result.spf_dmarc_scan_result.dmarc.warnings)
 
+        if result.spf_dmarc_scan_result and result.spf_dmarc_scan_result.ssl:
+            for item in result.spf_dmarc_scan_result.ssl.results:
+                for problem in [item.error, item.warning]:
+                    if problem:
+                        status_reasons.append("Problem for server %s port %s: %s" % (item.mx, item.port, problem))
+
         if status_reasons:
             status = TaskStatus.INTERESTING
             status_reason = "Found problems: " + ", ".join(sorted(status_reasons))
@@ -182,13 +224,10 @@ class MailDNSScanner(ArtemisBase):
             status = TaskStatus.OK
             status_reason = None
 
-        self.db.save_task_result(
+        self.save_task_result(
             task=current_task, status=status, status_reason=status_reason, data=dataclasses.asdict(result)
         )
 
 
-RuntimeConfigurationRegistry().register_configuration(MailDNSScanner.identity, MailDNSScannerConfiguration)
-
-
 if __name__ == "__main__":
-    MailDNSScanner().loop()
+    MailDNSScanner.parallel_loop()

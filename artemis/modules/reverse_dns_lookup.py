@@ -36,7 +36,7 @@ class ReverseDNSLookup(ArtemisBase):
             if not api.endswith("/"):
                 api = api + "/"
 
-            response = requests.get(api + ip)
+            response = requests.get(api + ip, timeout=Config.Limits.REQUEST_TIMEOUT_SECONDS)
             json_data = response.json()
             if "hostnames" in json_data:
                 self.log.info(f"Got hosts {json_data['hostnames']} from {api}")
@@ -80,7 +80,7 @@ class ReverseDNSLookup(ArtemisBase):
         self.log.info(
             f"reverse DNS lookup found domains: {found_domains}, actually triggered tasks for {actually_triggered_tasks}"
         )
-        self.db.save_task_result(
+        self.save_task_result(
             task=current_task,
             status=TaskStatus.OK,
             data={"found_domains": found_domains, "actually_triggered_tasks": actually_triggered_tasks},
@@ -88,4 +88,4 @@ class ReverseDNSLookup(ArtemisBase):
 
 
 if __name__ == "__main__":
-    ReverseDNSLookup().loop()
+    ReverseDNSLookup.parallel_loop()

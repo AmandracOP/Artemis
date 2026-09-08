@@ -14,29 +14,45 @@ logger = utils.build_logger(__name__)
 
 DONT_CLEANUP_TASKS_FRESHER_THAN__DAYS = 3
 DELAY_BETWEEN_CLEANUPS__SECONDS = 4 * 3600
-OLD_MODULES = ["dalfox", "http_service_to_url"]
+OLD_MODULES = ["dalfox", "http_service_to_url", "nuclei"]
 
 db = DB()
+
+
+def _migrate_nuclei_queues() -> None:
+    backend = KartonBackend(config=KartonConfig())
+
+    for source_queue in backend.redis.scan_iter(match="karton.queue.*:nuclei"):
+        destination_queue = source_queue[: -len(":nuclei")] + ":nuclei-router"
+
+        moved_in_queue = 0
+        while backend.redis.rpoplpush(source_queue, destination_queue):  # type: ignore
+            moved_in_queue += 1
+
+        if moved_in_queue > 0:
+            logger.info(
+                "Migrated %d task(s) from %s to %s",
+                moved_in_queue,
+                source_queue,
+                destination_queue,
+            )
 
 
 def _cleanup_tasks_not_in_queues() -> None:
     # Until https://github.com/CERT-Polska/karton/issues/262 gets fixed, let's have our own cleanup routine
     backend = KartonBackend(config=KartonConfig())
 
-    keys = backend.redis.keys()
     tasks = set()
-    for key in keys:
-        if key.startswith("karton.task"):
-            if ":" in key:
-                tasks.add(key.split(":")[1])
-            else:
-                logger.error("Invalid key: %s", key)
+    for key in backend.redis.scan_iter(match="karton.task*"):
+        if ":" in key:
+            tasks.add(key.split(":")[1])
+        else:
+            logger.error("Invalid key: %s", key)
 
     queued_tasks = set()
-    for key in keys:
-        if key.startswith("karton.queue"):
-            for task in backend.redis.lrange(key, 0, -1):
-                queued_tasks.add(task)
+    for key in backend.redis.scan_iter(match="karton.queue*"):
+        for task in backend.redis.lrange(key, 0, -1):
+            queued_tasks.add(task)
 
     num_tasks_cleaned_up = 0
     for item in tasks - queued_tasks:
@@ -48,7 +64,7 @@ def _cleanup_tasks_not_in_queues() -> None:
         task = json.loads(value)
         if (
             datetime.datetime.utcfromtimestamp(task["last_update"])
-            < datetime.datetime.now() - datetime.timedelta(days=DONT_CLEANUP_TASKS_FRESHER_THAN__DAYS)
+            < datetime.datetime.utcnow() - datetime.timedelta(days=DONT_CLEANUP_TASKS_FRESHER_THAN__DAYS)
             or task.get("headers", {}).get("receiver", "") in OLD_MODULES
         ):
             num_tasks_cleaned_up += 1
@@ -116,6 +132,8 @@ def _cleanup_scheduled_tasks() -> None:
 
 
 def cleanup() -> None:
+    # this needs to be firstafter so that old Nuclei queue gets migrated before it gets removed
+    _migrate_nuclei_queues()
     _cleanup_tasks_not_in_queues()
     _cleanup_queues()
     _cleanup_scheduled_tasks()
@@ -125,6 +143,6 @@ if __name__ == "__main__":
     while True:
         try:
             cleanup()
-            time.sleep(DELAY_BETWEEN_CLEANUPS__SECONDS)
         except Exception:
             logger.exception("Error during cleanup")
+        time.sleep(DELAY_BETWEEN_CLEANUPS__SECONDS)

@@ -11,18 +11,29 @@ First, you need to prepare a machine. The recommended configuration for the scan
 - 2 cores,
 - 30GB of free disk space to store Docker images and scan results.
 
-To start Artemis, clone the ``https://github.com/CERT-Polska/Artemis/`` repository and execute the
-following command in your terminal in the ``Artemis`` directory:
+To start Artemis:
 
-.. code-block:: console
+- clone the ``https://github.com/CERT-Polska/Artemis/`` repository,
+- copy the ``.env.example`` file to ``.env``,
+- set ``FRONTEND_USERNAME`` and ``FRONTEND_PASSWORD`` in ``.env`` (these credentials will be required when logging in at ``localhost:5000``),
+- execute the following command in your terminal in the ``Artemis`` directory:
 
-   ./scripts/start
+  .. code-block:: console
+
+     ./scripts/start --mode=<production|development>
+
 
 After that you should be able to access the Artemis dashboard at ``localhost:5000``.
 
 The above command will automatically create a ``.env`` file with default settings if it doesn't exist. You can edit this file later to configure various settings, including customizing the user-agent by setting the ``CUSTOM_USER_AGENT`` variable, as well as other relevant parameters.
 
 We strongly recommend setting the ``CUSTOM_USER_AGENT`` and configuring rate-limiting for scanning (more information here: :doc:`user-guide/cooperation-with-scanned-entities`). For a complete list of configuration variables and their descriptions, please refer to the :doc:`user-guide/configuration` section in the documentation.
+
+
+.. note ::
+
+   Setting the mode to ``development`` provides you with some quality of life changes when developing project, e.g. enables use of pdb in the containers,
+   opens postgres container port to your machine, starts web container in hot reload and mounts working directory to volumes of Karton workers
 
 **We recommend you to add additional Artemis modules from** https://github.com/CERT-Polska/Artemis-modules-extra/ -
 these modules haven't been included in core due to licensing reasons, but provide additional features such
@@ -34,14 +45,18 @@ the Artemis directory** and run ``./scripts/start``.
 
 .. note ::
 
-   Artemis exposes port 5000 that can be used to add tasks and view results. Remember that this port
-   shouldn't be available publicly, but e.g. on an internal network.
+   Artemis exposes its API/web interface on port 5000. Even with authentication enabled,
+   it is strongly recommended **not** to expose this port publicly (e.g. keep it on an
+   internal network only), to prevent unauthorized use of the scanner and reduce exposure
+   to attacks such as brute force or credential stuffing.
 
-   To add authorization (or SSL termination), you may for example use a reverse proxy, e.g. nginx.
+   To add SSL termination consider using a reverse proxy such as nginx.
 
-**If you want to increase the number of instances of a module to speed up scanning, modify the numbers of instances in** ``./scripts/start``
-(e.g. by changing ``--scale=karton-bruter=5`` to ``--scale=karton-bruter=20``). By default
-some modules are spawned in a couple of instances, but you may want more of them.
+**If you want to increase the number of instances of a module to speed up scanning, modify the numbers of instances in the** ``.env``
+file (by adding or updating the ``NUM_WORKERS_PER_CONTAINER_MODULE_NAME`` setting, e.g. by changing ``NUM_WORKERS_PER_CONTAINER_BRUTER=5``
+to ``NUM_WORKERS_PER_CONTAINER_BRUTER=20``).
+
+By default some modules are spawned in a couple of instances, but you may want more of them.
 
 For the full list of available configuration options you may set in the ``.env`` file, see :doc:`user-guide/configuration`.
 
@@ -57,6 +72,11 @@ To add targets to be scanned, select ``Add targets`` from the top navigation bar
 in the form of entries separated with newlines. Artemis works with both IPs and domains. It also supports
 IP ranges, both in the form of `127.0.0.1-127.0.0.10` or `127.0.0.0/30` and `host:port` syntax - in the latter
 case, no port scanning will be performed.
+
+You may also provide a root URL such as `https://example.com/` or `ssh://example.com:22/`. In that case the
+scheme selects the service directly, so no port scanning or fingerprinting is performed - Artemis scans exactly
+the host, port and protocol given. The URL must be a root URL (`scheme://host[:port]/`) without a path, query
+or fragment.
 
 To be later able to filter various types of targets, provide a tag in the `Tag` field. You may
 also choose what modules will be executed, to increase scanning speed if you need only to check for
@@ -84,10 +104,10 @@ To turn off Artemis (without removing the scan results and pending tasks), use:
 
 .. code-block:: console
 
-   ./scripts/run_docker_compose down
+   ./scripts/run_docker_compose --mode=<production|development> down
 
 To remove all data, use:
 
 .. code-block:: console
 
-   ./scripts/run_docker_compose down --volumes
+   ./scripts/run_docker_compose --mode=<production|development> down --volumes

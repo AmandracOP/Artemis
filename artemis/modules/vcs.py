@@ -63,7 +63,7 @@ class VCSScanner(ArtemisBase):
         configs: List[VCSConfig] = [
             VCSConfig(name="git", path=".git/HEAD", magic=GIT_MAGIC),
             VCSConfig(name="svn", path=".svn/wc.db", magic=SVN_MAGIC),
-            VCSConfig(name="hg", path=".gh/store/00manifest.i", magic=HG_MAGIC),
+            VCSConfig(name="hg", path=".hg/store/00manifest.i", magic=HG_MAGIC),
         ]
         result = {}
         found_vcs_descriptions = []
@@ -80,7 +80,7 @@ class VCSScanner(ArtemisBase):
         else:
             status = TaskStatus.OK
             status_reason = None
-        self.db.save_task_result(task=current_task, status=status, status_reason=status_reason, data=result)
+        self.save_task_result(task=current_task, status=status, status_reason=status_reason, data=result)
 
     def run(self, current_task: Task) -> None:
         url = get_target_url(current_task)
@@ -90,4 +90,4 @@ class VCSScanner(ArtemisBase):
 
 
 if __name__ == "__main__":
-    VCSScanner().loop()
+    VCSScanner.parallel_loop()

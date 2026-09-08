@@ -9,17 +9,23 @@ services:
     env_file: env.test
     environment:
       API_TOKEN: api-token
+      FRONTEND_USERNAME: testuser
+      FRONTEND_PASSWORD: testpass
+      BLOCKLIST_FILE: /opt/test/e2e/data/blocklist_modules_test.yml
     volumes:
       - data-web:/data
       - ./docker/karton-test.ini:/etc/karton/karton.ini
+      - ./test/e2e/data/blocklist_modules_test.yml:/opt/test/e2e/data/blocklist_modules_test.yml:ro
 
   autoreporter:
     env_file: env.test
 
   karton-bruter:
     <<: *artemis-build
+    env_file: env.test
     environment:
-      REQUESTS_PER_SECOND: 0
+      REQUESTS_PER_SECOND: 20
+      NUM_WORKERS_PER_CONTAINER_BRUTER: 5
     volumes: ["./docker/karton-test.ini:/etc/karton/karton.ini"]
 
   karton-classifier:
@@ -43,6 +49,13 @@ services:
     environment:
         SCANNING_PACKETS_PER_SECOND: 5
         CUSTOM_PORT_SCANNER_PORTS: 21,80,6379
+    volumes: ["./docker/karton-test.ini:/etc/karton/karton.ini"]
+
+  karton-sql_injection_detector:
+    <<: *artemis-build
+    env_file: env.test
+    environment:
+      SQL_INJECTION_STOP_ON_FIRST_MATCH: "false"
     volumes: ["./docker/karton-test.ini:/etc/karton/karton.ini"]
 
   karton-system:

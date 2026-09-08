@@ -31,6 +31,7 @@ class AutomatedInteractionTestCase(BaseE2ETestCase):
         )
 
     def test_automated_interaction(self) -> None:
+        self.maxDiff = None
         self.assertTrue(
             requests.post(
                 BACKEND_URL + "api/add",
@@ -53,7 +54,17 @@ class AutomatedInteractionTestCase(BaseE2ETestCase):
         self.assertEqual(len(analyses), 1)
         self.assertEqual(
             set(analyses[0].keys()),
-            {"stopped", "target", "created_at", "id", "tag", "num_pending_tasks", "disabled_modules"},
+            {
+                "stopped",
+                "target",
+                "created_at",
+                "id",
+                "tag",
+                "num_pending_tasks",
+                "disabled_modules",
+                "priority",
+                "desired_priority",
+            },
         )
         self.assertEqual(analyses[0]["stopped"], False)
         self.assertEqual(analyses[0]["target"], "test-smtp-server.artemis")
@@ -112,8 +123,11 @@ class AutomatedInteractionTestCase(BaseE2ETestCase):
         self.assertEqual(task_results[0]["status"], "INTERESTING")
         self.assertEqual(
             task_results[0]["status_reason"],
-            "Found problems: Valid DMARC record not found. We recommend using all three mechanisms: SPF, DKIM and DMARC to decrease the possibility of successful e-mail message spoofing., "
-            "Valid SPF record not found. We recommend using all three mechanisms: SPF, DKIM and DMARC to decrease the possibility of successful e-mail message spoofing.",
+            "Found problems: Problem for server test-smtp-server.artemis port 25: STARTTLS not supported on test-smtp-server.artemis MX server, "
+            "Problem for server test-smtp-server.artemis port 465: Connection refused, Problem for server test-smtp-server.artemis port 587: Connection refused, "
+            "Valid DMARC record not found. We recommend using all three mechanisms: SPF, DKIM and DMARC to decrease the possibility of successful "
+            "e-mail message spoofing., Valid SPF record not found. We recommend using all three mechanisms: SPF, DKIM and DMARC to decrease the "
+            "possibility of successful e-mail message spoofing.",
         )
         self.assertEqual(task_results[0]["tag"], "automated-interaction")
         self.assertEqual(task_results[0]["target_string"], "test-smtp-server.artemis")

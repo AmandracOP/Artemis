@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import subprocess
+import sys
 
 from karton.core import Task
 
@@ -8,6 +9,8 @@ from artemis import load_risk_class
 from artemis.binds import TaskStatus, TaskType, WebApplication
 from artemis.config import Config
 from artemis.module_base import ArtemisBase
+
+JOOMLA_SCANNER_TIMEOUT_SECONDS = 600
 
 
 @load_risk_class.load_risk_class(load_risk_class.LoadRiskClass.MEDIUM)
@@ -25,7 +28,7 @@ class JoomlaExtensions(ArtemisBase):
         url = current_task.get_payload("url")
 
         command = [
-            "python",
+            sys.executable,
             "/joomla-scanner/myscanner.py",
             "-u",
             url,
@@ -36,7 +39,19 @@ class JoomlaExtensions(ArtemisBase):
         if self.requests_per_second_for_current_tasks:
             command.extend(["--rate-limit", str(int(self.requests_per_second_for_current_tasks))])
 
-        result = subprocess.check_output(command, cwd="/joomla-scanner").decode("utf-8", errors="ignore")
+        try:
+            result = subprocess.check_output(
+                command, cwd="/joomla-scanner", timeout=JOOMLA_SCANNER_TIMEOUT_SECONDS
+            ).decode("utf-8", errors="ignore")
+        except subprocess.TimeoutExpired:
+            self.log.warning("joomla-scanner timed out after %d seconds for %s", JOOMLA_SCANNER_TIMEOUT_SECONDS, url)
+            self.save_task_result(
+                task=current_task,
+                status=TaskStatus.ERROR,
+                status_reason=f"joomla-scanner timed out after {JOOMLA_SCANNER_TIMEOUT_SECONDS} seconds",
+                data={"outdated_extensions": []},
+            )
+            return
 
         self.log.info("joomla-scanner output: %s", result)
         messages = []
@@ -70,7 +85,7 @@ class JoomlaExtensions(ArtemisBase):
             status = TaskStatus.OK
             status_reason = None
 
-        self.db.save_task_result(
+        self.save_task_result(
             task=current_task,
             status=status,
             status_reason=status_reason,
@@ -81,4 +96,4 @@ class JoomlaExtensions(ArtemisBase):
 
 
 if __name__ == "__main__":
-    JoomlaExtensions().loop()
+    JoomlaExtensions.parallel_loop()

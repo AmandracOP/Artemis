@@ -52,15 +52,15 @@ class SSHBruter(ArtemisBase):
             #
             # It makes no sense to scan all domains as they are processed by the ip_lookup karton
             # and we would scan the same IP multiple times. Therefore we scan only IPs.
-            self.db.save_task_result(task=current_task, status=TaskStatus.OK)
+            self.save_task_result(task=current_task, status=TaskStatus.OK)
             return
 
         port = current_task.get_payload("port")
 
         result = SSHBruterResult()
         for username, password in BRUTE_CREDENTIALS:
+            client = paramiko.client.SSHClient()
             try:
-                client = paramiko.client.SSHClient()
                 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 self.log.info(
                     "Attempting connect: hostname=%s, port=%s, username=%s, password=%s", host, port, username, password
@@ -72,7 +72,6 @@ class SSHBruter(ArtemisBase):
                     lambda: client.connect(hostname=host, port=port, username=username, password=password)
                 )
                 result.credentials.append((username, password))
-                client.close()
             except (
                 paramiko.AuthenticationException,
                 paramiko.BadHostKeyException,
@@ -82,6 +81,8 @@ class SSHBruter(ArtemisBase):
                 paramiko.ssh_exception.SSHException,
             ):
                 pass
+            finally:
+                client.close()
 
         if result.credentials:
             status = TaskStatus.INTERESTING
@@ -91,8 +92,8 @@ class SSHBruter(ArtemisBase):
         else:
             status = TaskStatus.OK
             status_reason = None
-        self.db.save_task_result(task=current_task, status=status, status_reason=status_reason, data=result)
+        self.save_task_result(task=current_task, status=status, status_reason=status_reason, data=result)
 
 
 if __name__ == "__main__":
-    SSHBruter().loop()
+    SSHBruter.parallel_loop()

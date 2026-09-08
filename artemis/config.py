@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Annotated, Any, List, Optional, get_type_hints
 
 import decouple
@@ -62,7 +63,7 @@ class Config:
                 int,
                 "How old the task results need to be to be archived (in seconds) for tasks that don't have status=INTERESTING",
             ] = get_config(
-                "AUTOARCHIVER_MIN_AGE_SECONDS_NOT_INTERESTING", default=30 * 24 * 60 * 60, cast=int
+                "AUTOARCHIVER_MIN_AGE_SECONDS_NOT_INTERESTING", default=15 * 24 * 60 * 60, cast=int
             )  # 30 days
             AUTOARCHIVER_PACK_SIZE: Annotated[
                 int,
@@ -179,7 +180,7 @@ class Config:
 
     class Limits:
         TASK_TIMEOUT_SECONDS: Annotated[int, "What is the maximum task run time (after which it will get killed)."] = (
-            get_config("TASK_TIMEOUT_SECONDS", default=12 * 3600, cast=int)
+            get_config("TASK_TIMEOUT_SECONDS", default=24 * 3600, cast=int)
         )
 
         REQUEST_TIMEOUT_SECONDS: Annotated[
@@ -199,6 +200,29 @@ class Config:
             """,
         ] = get_config("REQUESTS_PER_SECOND", default=0, cast=float)
 
+    class CpeDictionary:
+        CPE_NVD_DIR: Annotated[
+            str,
+            "Directory where the NVD CPE dictionary is stored (inside the container). "
+            "Defaults to the bundled artemis/cpe_tools/nvdcpe-2.0 directory.",
+        ] = get_config(
+            "CPE_NVD_DIR",
+            default=str(Path(__file__).resolve().parent / "cpe_tools" / "nvdcpe-2.0"),
+        )
+
+        CPE_NVD_DOWNLOAD_URL: Annotated[
+            str,
+            "URL of the NVD CPE 2.0 feed tarball. Re-downloaded every CPE_NVD_REFRESH_INTERVAL_SECONDS to keep CPE lookups current.",
+        ] = get_config(
+            "CPE_NVD_DOWNLOAD_URL",
+            default="https://nvd.nist.gov/feeds/json/cpe/2.0/nvdcpe-2.0.tar.gz",
+        )
+
+        CPE_NVD_REFRESH_INTERVAL_SECONDS: Annotated[
+            int,
+            "How often (in seconds) the NVD CPE dictionary is re-downloaded and the title index rebuilt. Default is 24 h.",
+        ] = get_config("CPE_NVD_REFRESH_INTERVAL_SECONDS", default=24 * 3600, cast=int)
+
     class Miscellaneous:
         DEFAULT_MODULE_NUM_RETRIES: Annotated[
             int, "The number of times a module will be executed in an attempt to obtain a non-error status."
@@ -212,6 +236,16 @@ class Config:
         API_TOKEN: Annotated[str, "The token to authenticate to the API. Provide one to use the API."] = get_config(
             "API_TOKEN", default=None
         )
+
+        FRONTEND_USERNAME: Annotated[
+            str,
+            "Username used to log in to the Artemis web interface.",
+        ] = get_config("FRONTEND_USERNAME", default="")
+
+        FRONTEND_PASSWORD: Annotated[
+            str,
+            "Password used to log in to the Artemis web interface.",
+        ] = get_config("FRONTEND_PASSWORD", default="")
 
         REMOVE_LOGS_AFTER_DAYS: Annotated[int, "After what number of days the logs in karton-logs are removed."] = (
             get_config("REMOVE_LOGS_AFTER_DAYS", default=30)
@@ -244,7 +278,7 @@ class Config:
             "Logging format string (according to the syntax in https://docs.python.org/3/library/logging.html#logrecord-attributes)",
         ] = get_config(
             "LOGGING_FORMAT_STRING",
-            default="[%(levelname)s] - [%(asctime)s] %(filename)s - in %(funcName)s() (line %(lineno)d): %(message)s",
+            default="%(processName)s | [%(levelname)s] - [%(asctime)s] %(filename)s - in %(funcName)s() (line %(lineno)d): %(message)s",
         )
 
         PASSWORD_BRUTER_ADDITIONAL_PASSWORDS: Annotated[
@@ -282,11 +316,11 @@ class Config:
             'false positives, where a failed DNS query may result with a "no DMARC" message.',
         ] = get_config("NUM_DNS_RESOLVER_RETRIES", default=3, cast=int)
 
-        MAX_NUM_TASKS_TO_PROCESS: Annotated[
+        MAX_MODULE_TASK_PROCESSING_TIME__SECONDS: Annotated[
             int,
-            "After this number of tasks processed, each scanning module will get restarted. This is to prevent situations "
+            "After this number of module running time, each scanning module will get restarted. This is to prevent situations "
             "such as slow memory leaks.",
-        ] = get_config("MAX_NUM_TASKS_TO_PROCESS", default=1000, cast=int)
+        ] = get_config("MAX_MODULE_TASK_PROCESSING_TIME__SECONDS", default=3 * 24 * 3600, cast=int)
 
         CONTENT_PREFIX_SIZE: Annotated[
             int,
@@ -298,10 +332,9 @@ class Config:
             "Artemis modules that are disabled by default (but may easily be enabled in the UI)",
         ] = get_config(
             "MODULES_DISABLED_BY_DEFAULT",
-            default="admin_panel_login_bruter,api_scanner,dangling_dns_detector,example,humble,ssh_bruter,xss_scanner",
+            default="admin_panel_login_bruter,api_scanner,dangling_dns_detector,example,humble,leak_scanner,ssh_bruter,xss_scanner",
             cast=decouple.Csv(str, delimiter=","),
         )
-
         SUBDOMAIN_ENUMERATION_TTL_DAYS: Annotated[
             int,
             "If we request a domain for subdomain enumeration, we will save that it has already been enumerated, so that e.g. "
@@ -316,7 +349,7 @@ class Config:
         MAX_URLS_TO_SCAN: Annotated[
             int,
             "Maximum number of URLs to scan per target for modules that crawl like lfi_detector, Nuclei, sq_injection_detector, etc.",
-        ] = get_config("MAX_URLS_TO_SCAN", default=25, cast=int)
+        ] = get_config("MAX_URLS_TO_SCAN", default=15, cast=int)
 
         CLEANUP_RAISE_ERROR_ON_NON_UNFINISHED_ANALYSES: Annotated[
             bool, "Raise error in case cleanup task did not found unfinished analyses."
@@ -328,8 +361,18 @@ class Config:
                 int,
                 "How many times to recheck whether the good password works, and the bad doesn't",
             ] = get_config("ADMIN_PANEL_LOGIN_BRUTER_NUM_RECHECKS", default=10, cast=int)
+            ADMIN_PANEL_LOGIN_BRUTER_MAX_RECHECKS_PER_PATH: Annotated[
+                int,
+                "Maximum number of maybe-working credential pairs that we will recheck per path. This is to prevent too much time spent on rechecking in case of a large number of false positives.",
+            ] = get_config("ADMIN_PANEL_LOGIN_BRUTER_MAX_RECHECKS_PER_PATH", default=10, cast=int)
 
         class APIScanner:
+            API_SPEC_MAX_SIZE: Annotated[
+                int,
+                "Maximum size in bytes for downloading OpenAPI/Swagger specification files. "
+                "The default CONTENT_PREFIX_SIZE (100KB) is too small for most real-world API specs.",
+            ] = get_config("API_SPEC_MAX_SIZE", default=5 * 1024 * 1024, cast=int)
+
             ONLY_GET_REQUESTS: Annotated[
                 bool,
                 "If set to True, API scanner will only use GET requests to scan. If to False, a more intrusive scan "
@@ -354,19 +397,55 @@ class Config:
                 "doesn't exist, thus decreasing the number of false positives at the cost of losing some true positives.",
             ] = get_config("BRUTER_FOLLOW_REDIRECTS", default=True, cast=bool)
 
+        class Crawling:
+            KATANA_DEPTH: Annotated[int, "Crawl depth passed to Katana (-d)."] = get_config(
+                "KATANA_DEPTH", default=2, cast=int
+            )
+
+            KATANA_MAX_URLS: Annotated[int, "Hard cap on URLs collected by Katana per target (passed as -mdp)."] = (
+                get_config("KATANA_MAX_URLS", default=50, cast=int)
+            )
+
+            KATANA_TIMEOUT_SECONDS: Annotated[
+                int,
+                "Subprocess-level timeout for the Katana run, separate from TASK_TIMEOUT_SECONDS. On timeout, partial "
+                "output is parsed and cached with KATANA_TIMEOUT_CACHE_TTL_SECONDS.",
+            ] = get_config("KATANA_TIMEOUT_SECONDS", default=180, cast=int)
+
+            KATANA_CONCURRENCY: Annotated[int, "Katana internal concurrency (-c)."] = get_config(
+                "KATANA_CONCURRENCY", default=10, cast=int
+            )
+
+            CRAWL_CACHE_TTL_SECONDS: Annotated[int, "Redis TTL for a successful crawl result."] = get_config(
+                "CRAWL_CACHE_TTL_SECONDS", default=24 * 60 * 60, cast=int
+            )
+
+            KATANA_TIMEOUT_CACHE_TTL_SECONDS: Annotated[
+                int,
+                "Redis TTL when a crawl timed out and we are caching partial output. Shorter than full TTL so we "
+                "retry sooner.",
+            ] = get_config("KATANA_TIMEOUT_CACHE_TTL_SECONDS", default=60 * 60, cast=int)
+
+        class CveLookup:
+            CVE_LOOKUP_NVD_REQUESTS_PER_SECOND: Annotated[
+                float,
+                "Rate limit for NVD API queries. NVD allows 5 requests per 30 seconds (~0.166 r/s).",
+            ] = get_config("CVE_LOOKUP_NVD_REQUESTS_PER_SECOND", default=0.16, cast=float)
+
+            CVE_LOOKUP_NVD_API_URL: Annotated[
+                str,
+                "Base URL of the NVD CVE API. Overridable mainly so the integration tests can point "
+                "the module at a local mock instead of the live NVD service.",
+            ] = get_config(
+                "CVE_LOOKUP_NVD_API_URL",
+                default="https://services.nvd.nist.gov/rest/json/cves/2.0",
+                cast=str,
+            )
+
         class DanglingDnsDetector:
             DANGLING_DNS_SKIP_ROOT_DOMAIN: Annotated[
                 bool, "If set to True, detector will not perform checks against the root domain."
             ] = get_config("DANGLING_DNS_SKIP_ROOT_DOMAIN", default=False, cast=bool)
-            DANGLING_DNS_NUMBER_OF_RETRIES_FOR_IP: Annotated[int, "Number of retries for dangling ip records."] = (
-                get_config("DANGLING_DNS_NUMBER_OF_RETRIES_FOR_IP", default=20, cast=int)
-            )
-            DANGLING_DNS_MAX_DELAY_RETRY: Annotated[int, "Max number of delay in seconds between each retry."] = (
-                get_config("DANGLING_DNS_MAX_DELAY_RETRY", default=3600, cast=int)
-            )
-            DANGLING_DNS_DELAY_STEP: Annotated[int, "Number of seconds for incremental step for retries."] = get_config(
-                "DANGLING_DNS_DELAY_STEP", default=600, cast=int
-            )
             DANGLING_DNS_KNOWN_DNS_ZONE_RECORDS_TO_SKIP: Annotated[
                 list[str],
                 "The list of known DNS zone records to skip. In case of those zone names we are sure that they are not claimable.",
@@ -435,7 +514,7 @@ class Config:
             NUCLEI_INTERACTSH_SERVER: Annotated[
                 str,
                 "Which interactsh server to use. if None, uses the default.",
-            ] = get_config("NUCLEI_INTERACTSH_SERVER", default=None, cast=str)
+            ] = get_config("NUCLEI_INTERACTSH_SERVER", default=None)
 
             NUCLEI_CHECK_TEMPLATE_LIST: Annotated[
                 bool,
@@ -444,10 +523,17 @@ class Config:
             ] = get_config("NUCLEI_CHECK_TEMPLATE_LIST", default=True, cast=bool)
 
             NUCLEI_SECONDS_PER_REQUEST_ON_RETRY: Annotated[
-                bool,
+                float,
                 "When retrying due to 'context deadline exceeded', each request will take at least max(2 * SECONDS_PER_REQUEST, "
-                "NUCLEI_SECONDS_PER_REQUEST_ON_RETRY).",
+                "NUCLEI_SECONDS_PER_REQUEST_ON_RETRY). See NUCLEI_MAX_SECONDS_PER_REQUEST_ON_RETRY config to set a limit",
             ] = get_config("NUCLEI_SECONDS_PER_REQUEST_ON_RETRY", default=0.1, cast=float)
+
+            NUCLEI_MAX_SECONDS_PER_REQUEST_ON_RETRY: Annotated[
+                float,
+                "Set to positive value to enable. "
+                "When retrying due to 'context deadline exceeded', each request will take min(max(2 * SECONDS_PER_REQUEST, "
+                "NUCLEI_SECONDS_PER_REQUEST_ON_RETRY), NUCLEI_MAX_SECONDS_PER_REQUEST_ON_RETRY) if enabled.",
+            ] = get_config("NUCLEI_MAX_SECONDS_PER_REQUEST_ON_RETRY", default=2.0, cast=float)
 
             NUCLEI_TEMPLATE_GROUPS_FILE: Annotated[
                 str,
@@ -504,6 +590,7 @@ class Config:
                         "http/exposed-panels/arcgis/arcgis-rest-api.yaml",
                         # Source of FPs
                         "custom:CVE-2019-1579",
+                        "custom:CVE-2025-68461",
                         "custom:CVE-2024-35286",
                         "custom:CVE-2025-24016",
                         "custom:xss-inside-tag-top-params.yaml",
@@ -585,10 +672,22 @@ class Config:
                         # Not that severe to spam people
                         "javascript/cves/2023/CVE-2023-48795.yaml",
                         "http/cves/2024/CVE-2024-43919.yaml",
+                        "network/default-login/ftp-weak-credentials.yaml",
                         # We already check for Gitlab
                         "http/exposed-panels/ghe-encrypt-saml.yaml",
                         # Too many FPs
                         "dast/vulnerabilities/crlf/cookie-injection.yaml",
+                        # Roundcube templates producing FP
+                        "http/cves/2025/CVE-2025-49113.yaml",
+                        "http/cves/2024/CVE-2024-42009.yaml",
+                        # wildcard sites will match this template very often, block till fixed
+                        "http/exposures/logs/opencart-error-log.yaml",
+                        # DAST templates that might produce false positives
+                        # TODO: to remove after implementing FP validation for these templates
+                        "dast/vulnerabilities/injection/unix-command-injection.yaml",
+                        "dast/vulnerabilities/injection/windows-command-injection.yaml",
+                        "dast/vulnerabilities/sqli/time-based-sqli.yaml",
+                        "http/cves/2022/CVE-2022-44727.yaml",
                     ]
                 ),
                 cast=decouple.Csv(str),
@@ -653,6 +752,7 @@ class Config:
                         "http/exposed-panels/pulse-secure-version.yaml",
                         "http/exposed-panels/cisco/cisco-asa-panel.yaml",
                         "http/exposed-panels/cisco/cisco-anyconnect-vpn.yaml",
+                        "http/exposed-panels/cyberoam-ssl-vpn-panel.yaml",
                         "http/exposed-panels/openvpn-connect.yaml",
                         "http/exposed-panels/ivanti-csa-panel.yaml",
                         "http/exposed-panels/ivanti-connect-secure-panel.yaml",
@@ -661,6 +761,9 @@ class Config:
                         "http/exposed-panels/casdoor-login.yaml",
                         "http/exposed-panels/openam-panel.yaml",
                         "http/exposed-panels/sonicwall-sslvpn-panel.yaml",
+                        "http/exposed-panels/netscaler-aaa-login.yaml",
+                        "http/exposed-panels/citrix-adc-gateway-panel.yaml",
+                        "http/exposed-panels/globalprotect-panel.yaml",
                         # Online stores, CRMs, chats and ticketing systems - it's a standard practice to have them exposed in a small organization
                         "http/exposed-panels/bitrix-panel.yaml",
                         "http/exposed-panels/dynamicweb-panel.yaml",
@@ -914,7 +1017,7 @@ class Config:
                 "Maximum number of links to be checked with the templates provided in "
                 "NUCLEI_TEMPLATES_TO_RUN_ON_HOMEPAGE_LINKS (if more are seen, random "
                 "NUCLEI_MAX_NUM_LINKS_TO_PROCESS are chosen).",
-            ] = get_config("NUCLEI_MAX_NUM_LINKS_TO_PROCESS", default=20, cast=int)
+            ] = get_config("NUCLEI_MAX_NUM_LINKS_TO_PROCESS", default=15, cast=int)
 
             NUCLEI_CHUNK_SIZE: Annotated[
                 int,
@@ -1062,12 +1165,29 @@ class Config:
                 "Time to sleep between retries for subdomain enumeration in seconds.",
             ] = get_config("SUBDOMAIN_ENUMERATION_SLEEP_TIME_SECONDS", default=60, cast=int)
 
+            SUBFINDER_PROVIDER_CONFIG: Annotated[
+                str,
+                "Subfinder provider configuration in JSON format. "
+                "Used to generate provider-config.yaml dynamically. "
+                "Example: "
+                '\'{"github": ["key1", "key2"], "virustotal": ["key"]}\'',
+            ] = get_config("SUBFINDER_API_KEYS", default="")
+
             GAU_ADDITIONAL_OPTIONS: Annotated[
                 List[str],
                 "Additional command-line options that will be passed to gau (https://github.com/lc/gau).",
             ] = get_config(
                 "SUBDOMAIN_ENUMERATION_GAU_ADDITIONAL_OPTIONS", default="", cast=decouple.Csv(str, delimiter=" ")
             )
+
+            LARGE_SUBDOMAIN_COUNT_VERIFICATION_THRESHOLD: Annotated[
+                int,
+                "When the total number of discovered subdomains exceeds this value, a wildcard DNS "
+                "filter is applied before dispatching tasks. A sample random subdomains of the parent "
+                "domain is resolved to build a wildcard IP baseline; any candidate subdomain whose "
+                "resolved IPs are all within that baseline (indicating an ISP catch-all or wildcard "
+                "DNS configuration) is dropped. Set to 0 to disable (default).",
+            ] = get_config("SUBDOMAIN_ENUMERATION_LARGE_COUNT_VERIFICATION_THRESHOLD", default=0, cast=int)
 
         class VCS:
             VCS_MAX_DB_SIZE_BYTES: Annotated[
@@ -1085,6 +1205,11 @@ class Config:
                 "If this option is set to True, version check for such plugins will not be performed.",
             ] = get_config("WORDPRESS_SKIP_VERSION_CHECK_ON_LESS_POPULAR_PLUGINS", default=False, cast=bool)
 
+            WORDFENCE_API_KEY: Annotated[
+                str,
+                "If set, Artemis will fetch WordFence vulnerability data and enrich wordpress_plugins reports with CVE information.",
+            ] = get_config("WORDFENCE_API_KEY", default=None)
+
         class WordPressScanner:
             WORDPRESS_VERSION_AGE_DAYS: Annotated[
                 int,
@@ -1096,13 +1221,33 @@ class Config:
         class DomainExpirationScanner:
             DOMAIN_EXPIRATION_TIMEFRAME_DAYS: Annotated[
                 int, "The scanner warns if the domain's expiration date falls within this time frame from now."
-            ] = get_config("DOMAIN_EXPIRATION_TIMEFRAME_DAYS", default=30, cast=int)
+            ] = get_config("DOMAIN_EXPIRATION_TIMEFRAME_DAYS", default=45, cast=int)
+
+        class OrmInjectionDetector:
+            ORM_INJECTION_STOP_ON_FIRST_MATCH: Annotated[
+                bool,
+                "Whether to stop scanning after the first ORM injection finding.",
+            ] = get_config("ORM_INJECTION_STOP_ON_FIRST_MATCH", default=True, cast=bool)
+            ORM_INJECTION_NUM_CONFIRMATIONS: Annotated[
+                int,
+                "How many times a differential response must reproduce before it is reported as a finding. "
+                "Guards against flaky services where a one-off difference is not actually caused by ORM "
+                "injection.",
+            ] = get_config("ORM_INJECTION_NUM_CONFIRMATIONS", default=10, cast=int)
 
         class SqlInjectionDetector:
             SQL_INJECTION_STOP_ON_FIRST_MATCH: Annotated[
                 bool,
                 "Whether to display only the first SQL injection and stop scanning.",
             ] = get_config("SQL_INJECTION_STOP_ON_FIRST_MATCH", default=True, cast=bool)
+            SQL_INJECTION_MINIMAL_PARAMS_MAX_LEN: Annotated[
+                int,
+                "Maximum number of parameters kept after SQLi parameter minimization.",
+            ] = get_config("SQL_INJECTION_MINIMAL_PARAMS_MAX_LEN", default=5, cast=int)
+            SQL_INJECTION_MINIMAL_HEADERS_MAX_LEN: Annotated[
+                int,
+                "Maximum number of headers kept after SQLi header minimization.",
+            ] = get_config("SQL_INJECTION_MINIMAL_HEADERS_MAX_LEN", default=5, cast=int)
             SQL_INJECTION_NUM_RETRIES_TIME_BASED: Annotated[
                 int,
                 "How many times to re-check whether long request duration with inject (and short without inject) is indeed a vulnerability or a random fluctuation ",
@@ -1112,11 +1257,34 @@ class Config:
                 "Seconds to sleep using the sleep() or pg_sleep() methods",
             ] = get_config("SQL_INJECTION_TIME_THRESHOLD", default=5, cast=int)
 
+        class CommandInjectionDetector:
+            COMMAND_INJECTION_STOP_ON_FIRST_MATCH: Annotated[
+                bool,
+                "Whether to display only the first OS command injection and stop scanning.",
+            ] = get_config("COMMAND_INJECTION_STOP_ON_FIRST_MATCH", default=True, cast=bool)
+            COMMAND_INJECTION_MINIMAL_PARAMS_MAX_LEN: Annotated[
+                int,
+                "Maximum number of parameters kept after OS command injection parameter minimization.",
+            ] = get_config("COMMAND_INJECTION_MINIMAL_PARAMS_MAX_LEN", default=5, cast=int)
+            COMMAND_INJECTION_NUM_RETRIES_TIME_BASED: Annotated[
+                int,
+                "How many times to re-check whether a long request duration with the injected sleep (and a short "
+                "one without it) is indeed a vulnerability rather than a random fluctuation.",
+            ] = get_config("COMMAND_INJECTION_NUM_RETRIES_TIME_BASED", default=10, cast=int)
+            COMMAND_INJECTION_TIME_THRESHOLD: Annotated[
+                int,
+                "Seconds to sleep using the sleep command in time-based OS command injection detection.",
+            ] = get_config("COMMAND_INJECTION_TIME_THRESHOLD", default=5, cast=int)
+
         class LFIDetector:
             LFI_STOP_ON_FIRST_MATCH: Annotated[
                 bool,
                 "Whether to display only the first LFI and stop scanning.",
             ] = get_config("LFI_STOP_ON_FIRST_MATCH", default=True, cast=bool)
+            LFI_MINIMAL_PARAMS_MAX_LEN: Annotated[
+                int,
+                "Maximum number of parameters kept after LFI parameter minimization.",
+            ] = get_config("LFI_MINIMAL_PARAMS_MAX_LEN", default=5, cast=int)
 
     @staticmethod
     def verify_each_variable_is_annotated() -> None:

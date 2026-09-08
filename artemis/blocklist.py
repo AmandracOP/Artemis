@@ -8,6 +8,7 @@ from typing import List, Optional, Union
 import yaml
 
 from artemis import utils
+from artemis.cdn_ip_ranges import is_cdn_ip
 from artemis.domains import is_domain, is_subdomain
 from artemis.reporting.base.report import Report
 from artemis.reporting.base.report_type import ReportType
@@ -54,7 +55,7 @@ def load_blocklist(file_path: Optional[str]) -> List[BlocklistItem]:
         return []
 
     with open(file_path, "r") as file:
-        data = yaml.safe_load(file)
+        data = yaml.safe_load(file) or []
 
     expected_keys = {
         "mode",
@@ -106,6 +107,10 @@ def should_block_scanning(
     domain: Optional[str], ip: Optional[str], karton_name: Optional[str], blocklist: List[BlocklistItem]
 ) -> bool:
     logger.info("checking whether scanning of domain=%s ip=%s by %s is filtered", domain, ip, karton_name)
+    if not domain and ip and is_cdn_ip(ip):
+        logger.info("Directly scanning CDN IPs is blocked.")
+        return True
+
     for item in blocklist:
         if item.mode != BlocklistMode.BLOCK_SCANNING_AND_REPORTING:
             continue
@@ -137,7 +142,7 @@ def should_block_scanning(
         if item.ip_range:
             if not ip:
                 continue
-            if ipaddress.IPv4Address(ip) not in item.ip_range:
+            if ipaddress.ip_address(ip) not in item.ip_range:
                 continue
 
         if item.until:
@@ -211,7 +216,7 @@ def blocklist_reports(reports: List[Report], blocklist: List[BlocklistItem]) -> 
             if item.ip_range:
                 if not report.target_ip:
                     continue
-                if ipaddress.IPv4Address(report.target_ip) not in item.ip_range:
+                if ipaddress.ip_address(report.target_ip) not in item.ip_range:
                     continue
 
             if item.until:

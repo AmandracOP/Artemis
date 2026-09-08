@@ -10,18 +10,31 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	wappalyzer "github.com/projectdiscovery/wappalyzergo"
 )
 
+const (
+	httpClientTimeout = 30 * time.Second
+	maxResponseBytes  = 10 * 1024 * 1024
+)
+
 var client = &http.Client{
+	Timeout: httpClientTimeout,
 	Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	},
 }
 
-func scan(url string, wappalyzerClient *wappalyzer.Wappalyze) map[string][]string {
-	result := make(map[string][]string)
+type TechInfo struct {
+	Name       string   `json:"name"`
+	CPE        string   `json:"cpe"`
+	Categories []string `json:"categories"`
+}
+
+func scan(url string, wappalyzerClient *wappalyzer.Wappalyze) map[string][]TechInfo {
+	result := make(map[string][]TechInfo)
 
 	resp, err := client.Get(url)
 	if err != nil {
@@ -30,12 +43,16 @@ func scan(url string, wappalyzerClient *wappalyzer.Wappalyze) map[string][]strin
 	}
 	defer resp.Body.Close()
 
-	data, _ := io.ReadAll(resp.Body)
-	fingerprints := wappalyzerClient.Fingerprint(resp.Header, data)
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	fingerprints := wappalyzerClient.FingerprintWithInfo(resp.Header, data)
 
-	techs := []string{}
-	for tech := range fingerprints {
-		techs = append(techs, tech)
+	techs := []TechInfo{}
+	for name, info := range fingerprints {
+		techs = append(techs, TechInfo{
+			Name:       name,
+			CPE:        info.CPE,
+			Categories: info.Categories,
+		})
 	}
 	result[url] = techs
 	return result
@@ -68,7 +85,7 @@ func main() {
 	}
 
 	wappalyzerClient, _ := wappalyzer.New()
-	finalResults := make(map[string][]string)
+	finalResults := make(map[string][]TechInfo)
 
 	for _, url := range urls {
 		result := scan(url, wappalyzerClient)

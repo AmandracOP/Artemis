@@ -1,6 +1,6 @@
 x-artemis-build-or-image:
   &artemis-build-or-image
-  image: certpl/artemis:latest
+  image: "${ARTEMIS_BUILD_IMAGE:-certpl/artemis:latest}"
   # Prevent NDOTS-based DNS search domain expansion for short hostnames such as
   # "s3mock", "redis", "postgres".  Without this, a host whose /etc/resolv.conf
   # contains e.g. "search corp.example.com" causes every DNS lookup for "s3mock"
@@ -29,12 +29,11 @@ services:
       - data-redis:/data
 
   s3mock:
-    <<: *logging
     image: adobe/s3mock:latest
     environment:
-      - initialBuckets=bucket
-    entrypoint: ["sh", "-c", "java -jar s3mock.jar 2>&1 > /dev/null"]
-
+      - COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS=bucket
+    logging:
+      driver: none
     deploy:
       resources:
         limits:
@@ -64,9 +63,12 @@ services:
     command: "bash -c 'alembic upgrade head && python3 -m artemis.reporting.task_handler'"
     env_file: .env
     restart: always
+    environment:
+      - CPE_NVD_DIR=/data/cpe-nvd
     volumes:
       - ./output/autoreporter/:/opt/output/autoreporter
       - "${DOCKER_COMPOSE_ADDITIONAL_SHARED_DIRECTORY:-./shared}:/shared/"
+      - cpe-nvd-data:/data/cpe-nvd
 
   cleanup:
     <<: [*logging, *artemis-build-or-image]
@@ -81,12 +83,28 @@ services:
     volumes: ["${DOCKER_COMPOSE_ADDITIONAL_SHARED_DIRECTORY:-./shared}:/shared/"]
     command: "python3 -m artemis.metrics"
 
+  cpe-nvd-service:
+    <<: [*logging, *artemis-build-or-image]
+    command: "python3 -m artemis.cpe_tools.cpe_main_process"
+    env_file: .env
+    environment:
+      - CPE_NVD_DIR=/data/cpe-nvd
+    volumes:
+      - cpe-nvd-data:/data/cpe-nvd
+    restart: always
+
   autoarchiver:
     <<: [*logging, *artemis-build-or-image]
     env_file: .env
     volumes:
       - ./archived-task-results/:/opt/archived-task-results/
     command: "bash -c 'alembic upgrade head && python3 -m artemis.autoarchiver.autoarchiver'"
+    restart: always
+
+  reprioritizer:
+    <<: [*logging, *artemis-build-or-image]
+    command: "bash -c 'alembic upgrade head && python3 -m artemis.reprioritizer.reprioritizer'"
+    env_file: .env
     restart: always
 
   web:
@@ -123,6 +141,13 @@ services:
   karton-classifier:
     <<: [*logging, *artemis-build-or-image]
     command: "python3 -m artemis.modules.classifier"
+    env_file: .env
+    restart: always
+    volumes: ["${DOCKER_COMPOSE_ADDITIONAL_SHARED_DIRECTORY:-./shared}:/shared/"]
+
+  karton-cve_lookup:
+    <<: [*logging, *artemis-build-or-image]
+    command: "python3 -m artemis.modules.cve_lookup"
     env_file: .env
     restart: always
     volumes: ["${DOCKER_COMPOSE_ADDITIONAL_SHARED_DIRECTORY:-./shared}:/shared/"]
@@ -257,15 +282,31 @@ services:
     restart: always
     volumes: ["${DOCKER_COMPOSE_ADDITIONAL_SHARED_DIRECTORY:-./shared}:/shared/"]
 
+  karton-ntlm_recon:
+    <<: [*logging, *artemis-build-or-image]
+    command: "python3 -m artemis.modules.ntlm_recon"
+    env_file: .env
+    restart: always
+    volumes: ["${DOCKER_COMPOSE_ADDITIONAL_SHARED_DIRECTORY:-./shared}:/shared/"]
+
   karton-nuclei:
     <<: [*logging, *artemis-build-or-image]
     command: "python3 -m artemis.modules.nuclei"
+    labels:
+      prometheus.port: "9001"
     env_file: .env
     restart: always
     volumes:
       - "${DOCKER_COMPOSE_ADDITIONAL_SHARED_DIRECTORY:-./shared}:/shared/"
       - data-nuclei-templates:/root/nuclei-templates
       - data-nuclei-config:/root/.config/nuclei
+
+  karton-nuclei-router:
+    <<: [*logging, *artemis-build-or-image]
+    command: "python3 -m artemis.modules.nuclei_router"
+    env_file: .env
+    restart: always
+    volumes: ["${DOCKER_COMPOSE_ADDITIONAL_SHARED_DIRECTORY:-./shared}:/shared/"]
 
   karton-port_scanner:
     <<: [*logging, *artemis-build-or-image]
@@ -316,9 +357,30 @@ services:
     restart: always
     volumes: ["${DOCKER_COMPOSE_ADDITIONAL_SHARED_DIRECTORY:-./shared}:/shared/"]
 
+  karton-command_injection_detector:
+    <<: [*logging, *artemis-build-or-image]
+    command: "python3 -m artemis.modules.command_injection_detector"
+    env_file: .env
+    restart: always
+    volumes: ["${DOCKER_COMPOSE_ADDITIONAL_SHARED_DIRECTORY:-./shared}:/shared/"]
+
+  karton-orm_injection_detector:
+    <<: [*logging, *artemis-build-or-image]
+    command: "python3 -m artemis.modules.orm_injection_detector"
+    env_file: .env
+    restart: always
+    volumes: ["${DOCKER_COMPOSE_ADDITIONAL_SHARED_DIRECTORY:-./shared}:/shared/"]
+
   karton-sql_injection_detector:
     <<: [*logging, *artemis-build-or-image]
     command: "python3 -m artemis.modules.sql_injection_detector"
+    env_file: .env
+    restart: always
+    volumes: ["${DOCKER_COMPOSE_ADDITIONAL_SHARED_DIRECTORY:-./shared}:/shared/"]
+
+  karton-ssh_bad_keys:
+    <<: [*logging, *artemis-build-or-image]
+    command: "python3 -m artemis.modules.ssh_bad_keys"
     env_file: .env
     restart: always
     volumes: ["${DOCKER_COMPOSE_ADDITIONAL_SHARED_DIRECTORY:-./shared}:/shared/"]
@@ -391,14 +453,10 @@ services:
     restart: always
     volumes: ["${DOCKER_COMPOSE_ADDITIONAL_SHARED_DIRECTORY:-./shared}:/shared/"]
 
-  test-service-with-exposed-apache-config:
-    image: php:7.4-apache
-    volumes:
-      - ./test/data/exposed_apache_config/:/var/www/html/
-
 volumes:
   data-nuclei-templates:
   data-nuclei-config:
   data-postgres:
   data-redis:
   data-web:
+  cpe-nvd-data:

@@ -91,10 +91,30 @@ class WordpressPluginsReporter(Reporter):
                 "type": item["type"],
                 "slug": item["slug"],
                 "version": item["version"],
+                "cves": item.get("cves", []),
+                "copyrights": [],
             }
+
+            for cve in additional_data["cves"]:
+                copyrights = cve.get("copyrights") or {}
+                if not isinstance(copyrights, dict):
+                    continue
+                for key, value in copyrights.items():
+                    if not isinstance(value, dict):
+                        continue
+                    additional_data["copyrights"].append(value)
 
             if "redirect_url" in task_result["result"]:
                 additional_data["redirect_url"] = task_result["result"]["redirect_url"]
+
+            additional_data["cves"] = sorted(additional_data["cves"], key=lambda item: item["cvss"], reverse=True)
+
+            max_cves = 8
+            if len(additional_data["cves"]) > max_cves:
+                additional_data["cves"] = additional_data["cves"][:max_cves]
+                additional_data["has_more_cves"] = True
+            else:
+                additional_data["has_more_cves"] = False
 
             result.append(
                 Report(

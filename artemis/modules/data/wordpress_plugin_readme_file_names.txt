@@ -381,7 +381,7 @@
   "woocommerce-mercadopago": "readme.txt",
   "robin-image-optimizer": "readme.txt",
   "widget-google-reviews": "readme.txt",
-  "crowdsignal-forms": "README.TXT",
+  "crowdsignal-forms": "readme.txt",
   "kliken-marketing-for-google": "readme.txt",
   "template-kit-import": "readme.txt",
   "hummingbird-performance": "readme.txt",
@@ -1486,7 +1486,7 @@
   "lockdown-wp-admin": "readme.txt",
   "wp-widget-disable": "readme.txt",
   "dk-pricr-responsive-pricing-table": "readme.txt",
-  "contact-forms-anti-spam": "README.txt",
+  "contact-forms-anti-spam": "readme.txt",
   "branda-white-labeling": "readme.txt",
   "wp-bottom-menu": "readme.txt",
   "wp-social": "readme.txt",
@@ -1524,5 +1524,6 @@
   "catch-web-tools": "readme.txt",
   "wp-native-php-sessions": "readme.txt",
   "tag-pages": "readme.txt",
-  "acme-demo-setup": "readme.txt"
+  "acme-demo-setup": "readme.txt",
+  "header-footer-builder-for-elementor": "README.MD"
 }

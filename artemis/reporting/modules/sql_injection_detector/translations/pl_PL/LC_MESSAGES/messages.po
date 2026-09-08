@@ -54,7 +54,11 @@ msgstr ""
 "to 'a'. Pozwoli to atakujacemu poznać zawartość całej bazy danych znak po"
 " znaku."
 
-#: artemis/reporting/modules/sql_injection_detector/template_sql_injection.jinja2:43
+#: artemis/reporting/modules/sql_injection_detector/template_sql_injection.jinja2:39
+msgid "Headers used:"
+msgstr "Użyte nagłówki:"
+
+#: artemis/reporting/modules/sql_injection_detector/template_sql_injection.jinja2:53
 msgid ""
 "These vulnerabilities can lead to serious security breaches, including "
 "user data leaks and potential database manipulation. The vulnerability "
@@ -65,4 +69,7 @@ msgstr ""
 "wycieku danych użytkowników i potencjalnej manipulacji bazą danych. "
 "Podatność występuje, gdy niebezpieczne dane wejściowe użytkownika są "
 "bezpośrednio wstrzykiwane do zapytań SQL, co umożliwia atakującym "
-"wykonanie dowolnych zapytań do bazy danych."
+"wykonanie dowolnych zapytań do bazy danych.<br/><br/>Aby dowiedzieć się "
+"więcej, przeczytaj <a href=\"https://wiedza.cert.pl/odpornosc-"
+"infrastruktury/bezpieczenstwo-webowe/sql-injection/\">artykuł</a> CERT "
+"Polska na temat tej podatności."

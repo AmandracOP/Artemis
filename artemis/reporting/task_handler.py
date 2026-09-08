@@ -8,9 +8,9 @@ import threading
 import time
 import traceback
 from pathlib import Path
+from typing import Optional
 
 import psutil
-from sqlalchemy.orm.exc import ObjectDeletedError
 
 from artemis import utils
 from artemis.config import Config
@@ -28,20 +28,25 @@ DUMP_TRACEBACKS_IF_RUNNING_LONGER_THAN__SECONDS = 300
 
 
 def handle_single_task(report_generation_task: ReportGenerationTask) -> Path:
-    if report_generation_task.skip_previously_exported:
-        previous_reports_directory = tempfile.mkdtemp()
-        # We want to treat only the reports visible from web as already known
-        for existing_task in db.list_report_generation_tasks():
-            if existing_task.output_location:
-                shutil.copy(
-                    Path(existing_task.output_location) / "advanced" / "output.json",
-                    Path(previous_reports_directory)
-                    / (hashlib.sha256(existing_task.output_location.encode("ascii")).hexdigest() + ".json"),
-                )
-    else:
-        previous_reports_directory = None
-
+    previous_reports_directory: Optional[str] = None
     try:
+        if report_generation_task.skip_previously_exported:
+            previous_reports_directory = tempfile.mkdtemp()
+            # We want to treat only the reports visible from web as already known
+            for existing_task in db.list_report_generation_tasks():
+                if existing_task.output_location:
+                    try:
+                        shutil.copy(
+                            Path(existing_task.output_location) / "advanced" / "output.json",
+                            Path(previous_reports_directory)
+                            / (hashlib.sha256(existing_task.output_location.encode("ascii")).hexdigest() + ".json"),
+                        )
+                    except FileNotFoundError:
+                        logger.warning(
+                            "Previous export output missing at %s, skipping for deduplication",
+                            existing_task.output_location,
+                        )
+
         return export(
             previous_reports_directory=Path(previous_reports_directory) if previous_reports_directory else None,
             tag=report_generation_task.tag,
@@ -54,7 +59,7 @@ def handle_single_task(report_generation_task: ReportGenerationTask) -> Path:
         )
     finally:
         if previous_reports_directory:
-            shutil.rmtree(previous_reports_directory)
+            shutil.rmtree(previous_reports_directory, ignore_errors=True)
 
 
 def report_mem() -> None:
@@ -68,44 +73,51 @@ def report_mem() -> None:
 
 def main() -> None:
     while True:
-        task = db.take_single_report_generation_task()
+        try:
+            task = db.take_single_report_generation_task()
 
-        if task:
-            logger.info(
-                "Took reporting task: skip_previously_exported=%s tag=%s language=%s custom_template_arguments=%s",
-                task.skip_previously_exported,
-                task.tag,
-                task.language,
-                task.custom_template_arguments,
-            )
-            if Config.Miscellaneous.LOG_LEVEL == "DEBUG":
-                faulthandler.dump_traceback_later(timeout=DUMP_TRACEBACKS_IF_RUNNING_LONGER_THAN__SECONDS, repeat=True)
-            report_mem()
-            try:
-                output_location = handle_single_task(task)
-                with open(output_location / "advanced" / "output.json") as output_file:
-                    output_data = json.load(output_file)
-                    alerts = output_data["alerts"]
-
-                db.save_report_generation_task_results(
-                    task, ReportGenerationTaskStatus.DONE, output_location=str(output_location), alerts=alerts
+            if task:
+                logger.info(
+                    "Took reporting task: skip_previously_exported=%s tag=%s language=%s custom_template_arguments=%s",
+                    task.skip_previously_exported,
+                    task.tag,
+                    task.language,
+                    task.custom_template_arguments,
                 )
-                logger.info("Reporting task succeeded")
-            except Exception:
-                logger.exception("Reporting task failed")
-
-                try:
-                    db.save_report_generation_task_results(
-                        task, ReportGenerationTaskStatus.FAILED, error=traceback.format_exc()
+                if Config.Miscellaneous.LOG_LEVEL == "DEBUG":
+                    faulthandler.dump_traceback_later(
+                        timeout=DUMP_TRACEBACKS_IF_RUNNING_LONGER_THAN__SECONDS, repeat=True
                     )
-                except ObjectDeletedError:
-                    # Ignore the case that the object has gone missing because someone called
-                    # /export/delete in the meantime.
-                    pass
+                report_mem()
+                try:
+                    output_location = handle_single_task(task)
+                    with open(output_location / "advanced" / "output.json") as output_file:
+                        output_data = json.load(output_file)
+                        alerts = output_data["alerts"]
 
-            if Config.Miscellaneous.LOG_LEVEL == "DEBUG":
-                faulthandler.cancel_dump_traceback_later()
-            report_mem()
+                    db.save_report_generation_task_results(
+                        task, ReportGenerationTaskStatus.DONE, output_location=str(output_location), alerts=alerts
+                    )
+                    logger.info("Reporting task succeeded")
+                except Exception:
+                    logger.exception("Reporting task failed")
+
+                    try:
+                        db.save_report_generation_task_results(
+                            task, ReportGenerationTaskStatus.FAILED, error=traceback.format_exc()
+                        )
+                    except Exception:
+                        # Catch all exceptions (not just ObjectDeletedError) to prevent
+                        # crashing the main loop. This covers both the case where someone
+                        # called /export/delete (ObjectDeletedError) and transient DB
+                        # errors (OperationalError, etc.).
+                        logger.exception("Failed to save error status for reporting task")
+
+                if Config.Miscellaneous.LOG_LEVEL == "DEBUG":
+                    faulthandler.cancel_dump_traceback_later()
+                report_mem()
+        except Exception:
+            logger.exception("Error in report generation main loop, will retry")
 
         time.sleep(1)
 

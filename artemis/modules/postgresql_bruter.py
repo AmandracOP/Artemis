@@ -39,11 +39,20 @@ class PostgreSQLBruter(ArtemisBase):
         result = PostgreSQLBruterResult()
 
         for username, password in BRUTE_CREDENTIALS:
+            conn = None
             try:
-                self.throttle_request(lambda: psycopg2.connect(host=host, port=port, user=username, password=password))
+                conn = self.throttle_request(
+                    lambda: psycopg2.connect(host=host, port=port, user=username, password=password)
+                )
                 result.credentials.append((username, password))
             except psycopg2.OperationalError:
                 pass
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
         if result.credentials:
             status = TaskStatus.INTERESTING
@@ -53,8 +62,8 @@ class PostgreSQLBruter(ArtemisBase):
         else:
             status = TaskStatus.OK
             status_reason = None
-        self.db.save_task_result(task=current_task, status=status, status_reason=status_reason, data=result)
+        self.save_task_result(task=current_task, status=status, status_reason=status_reason, data=result)
 
 
 if __name__ == "__main__":
-    PostgreSQLBruter().loop()
+    PostgreSQLBruter.parallel_loop()

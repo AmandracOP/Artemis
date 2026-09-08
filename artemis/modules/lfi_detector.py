@@ -1,18 +1,12 @@
-import random
-import re
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse, urlunparse
 
 from karton.core import Task
 
 from artemis import load_risk_class
 from artemis.binds import Service, TaskStatus, TaskType
 from artemis.config import Config
-from artemis.crawling import (
-    get_injectable_parameters,
-    get_links_and_resources_on_same_domain,
-)
+from artemis.crawling import get_injectable_parameters, get_links_to_scan
 from artemis.http_requests import HTTPResponse
 from artemis.module_base import ArtemisBase
 from artemis.modules.data.lfi_detector.lfi_detector_data import (
@@ -20,7 +14,6 @@ from artemis.modules.data.lfi_detector.lfi_detector_data import (
     RCE_PAYLOADS,
 )
 from artemis.modules.data.parameters import URL_PARAMS
-from artemis.modules.data.static_extensions import STATIC_EXTENSIONS
 from artemis.task_utils import get_target_url
 
 
@@ -47,29 +40,80 @@ class LFIDetector(ArtemisBase):
         {"type": TaskType.SERVICE.value, "service": Service.HTTP.value},
     ]
 
-    def _strip_query_string(self, url: str) -> str:
-        url_parsed = urlparse(url)
-        return urlunparse(url_parsed._replace(query="", fragment=""))
-
     def create_url_with_batch_payload(self, url: str, param_batch: List[str], payload: str) -> str:
         assignments = {key: payload for key in param_batch}
         concatenation = "&" if self.is_url_with_parameters(url) else "?"
         return f"{url}{concatenation}" + "&".join([f"{key}={value}" for key, value in assignments.items()])
 
     def is_url_with_parameters(self, url: str) -> bool:
-        return bool(re.search(r"/?/*=", url))
+        return "?" in url
 
     def contains_lfi_indicator(self, original_response: HTTPResponse, response: HTTPResponse) -> Optional[str]:
-        """Check if the response contains indicators of LFI."""
+        """Check if the response contains indicators of LFI.
+
+        Each indicator is a file-content signature that proves actual file contents
+        were leaked, not just an error message. The differential check (indicator
+        present in response but NOT in original response) prevents false positives.
+
+        Indicators cover:
+        - Linux /etc/passwd: root:x:, daemon:x:, bin:x:, nobody:x:
+        - Windows win.ini: [fonts], [extensions]
+        - Windows boot.ini (legacy NT/2000/XP/2003): [boot loader], [operating systems]
+        - PHP php://filter base64 wrapper output: base64 substrings of root:x: and <?php
+        """
         indicators = [
+            # Linux /etc/passwd - multiple lines for resilience
             ("root:x:", "/etc/passwd"),
-            ("Windows Registry Editor", "Windows .ini file"),
+            ("daemon:x:", "/etc/passwd"),
+            ("bin:x:", "/etc/passwd"),
+            ("nobody:x:", "/etc/passwd"),
+            # Windows win.ini - actual file content sections
+            ("[fonts]", "Windows win.ini"),
+            ("[extensions]", "Windows win.ini"),
+            # Windows boot.ini (legacy, pre-Vista)
+            ("[boot loader]", "Windows boot.ini"),
+            ("[operating systems]", "Windows boot.ini"),
+            # PHP php://filter base64 wrapper responses - base64 substrings
+            # searched directly in the raw response, no decoding needed.
+            # "cm9vdDp4" = base64 of "root:x" (first 8 chars of encoded /etc/passwd)
+            ("cm9vdDp4", "/etc/passwd via php://filter base64"),
+            # "PD9waHAg" = base64 of "<?php " (proves PHP source was leaked)
+            ("PD9waHAg", "PHP source code via php://filter base64"),
         ]
         for indicator, description in indicators:
             if indicator in response.content and indicator not in original_response.content:
                 self.log.debug(f"Matched LFI indicator: {description}")
                 return description
         return None
+
+    def minimize_parameters(
+        self, url: str, params: List[str], payload: str, original_response: HTTPResponse
+    ) -> List[str]:
+        """
+        Try to find the minimal set of parameters that still triggers LFI. Currently minimizes to single parameters only.
+        Falls back to original params if none work individually.
+        """
+        minimal_params: List[str] = []
+
+        for param in params:
+            test_url = self.create_url_with_batch_payload(url, [param], payload)
+            response = self.http_get(test_url)
+
+            if self.contains_lfi_indicator(original_response, response):
+                minimal_params.append(param)
+            if len(minimal_params) >= Config.Modules.LFIDetector.LFI_MINIMAL_PARAMS_MAX_LEN:
+                break
+
+        if minimal_params:
+            self.log.info(
+                "LFI parameter minimization: %s -> %s",
+                params,
+                minimal_params,
+            )
+            return minimal_params
+
+        # fallback if no single param triggers LFI
+        return params
 
     def scan(self, urls: List[str], task: Task) -> List[Dict[str, Any]]:
         """Scan URLs for LFI vulnerabilities."""
@@ -87,7 +131,8 @@ class LFIDetector(ArtemisBase):
             ]:
                 for payload in payloads:
                     param_batch = []
-                    for i, param in enumerate(parameters + URL_PARAMS):
+                    total_params = parameters + URL_PARAMS
+                    for i, param in enumerate(total_params):
                         param_batch.append(param)
                         url_with_payload = self.create_url_with_batch_payload(current_url, param_batch, payload)
 
@@ -95,16 +140,30 @@ class LFIDetector(ArtemisBase):
                         # length (as longer URLs may be unsupported by the servers).
                         #
                         # We can't have constant chunk size as the payloads have varied length.
-                        if len(url_with_payload) >= 1600 or i == len(URL_PARAMS) - 1:
+                        if len(url_with_payload) >= 1600 or i == len(total_params) - 1:
                             response = self.http_get(url_with_payload)
 
                             if indicator := self.contains_lfi_indicator(original_response, response):
+
+                                minimal_params = self.minimize_parameters(
+                                    current_url,
+                                    param_batch,
+                                    payload,
+                                    original_response,
+                                )
+
+                                minimal_url = self.create_url_with_batch_payload(
+                                    current_url,
+                                    minimal_params,
+                                    payload,
+                                )
+
                                 messages.append(
                                     {
-                                        "url": url_with_payload,
+                                        "url": minimal_url,
                                         "headers": {},
                                         "matched_indicator": indicator,
-                                        "statement": vulnerability_to_message[vulnerability] + " " + url_with_payload,
+                                        "statement": vulnerability_to_message[vulnerability] + " " + minimal_url,
                                         "code": vulnerability.value,
                                     }
                                 )
@@ -118,20 +177,9 @@ class LFIDetector(ArtemisBase):
         """Run the LFI detection module."""
         if self.check_connection_to_base_url_and_save_error(current_task):
             url = get_target_url(current_task)
+            links = get_links_to_scan(url)
 
-            links = get_links_and_resources_on_same_domain(url)
-            links.append(url)
-            links = list(set(links) | set([self._strip_query_string(link) for link in links]))
-
-            links = [
-                link.split("#")[0]
-                for link in links
-                if not any(link.split("?")[0].lower().endswith(extension) for extension in STATIC_EXTENSIONS)
-            ]
-
-            random.shuffle(links)
-
-            messages = self.scan(urls=links[: Config.Miscellaneous.MAX_URLS_TO_SCAN], task=current_task)
+            messages = self.scan(urls=links, task=current_task)
 
             if messages:
                 status = TaskStatus.INTERESTING
@@ -142,8 +190,8 @@ class LFIDetector(ArtemisBase):
 
             data = {"result": messages, "statements": {e.value: e.name for e in LFIFindings}}
 
-            self.db.save_task_result(task=current_task, status=status, status_reason=status_reason, data=data)
+            self.save_task_result(task=current_task, status=status, status_reason=status_reason, data=data)
 
 
 if __name__ == "__main__":
-    LFIDetector().loop()
+    LFIDetector.parallel_loop()

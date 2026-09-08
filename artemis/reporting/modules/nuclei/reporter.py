@@ -2,13 +2,16 @@ import collections
 import json
 import os
 import urllib.parse
-from typing import Any, Callable, Counter, Dict, List
+from typing import Any, Callable, Counter, Dict, List, Optional
 
 from artemis.config import Config
 from artemis.domains import is_domain
-from artemis.modules.nuclei import EXPOSED_PANEL_TEMPLATE_PATH_PREFIX
+from artemis.modules.nuclei import (
+    EXPOSED_PANEL_TEMPLATE_PATH_PREFIX,
+)
 from artemis.reporting.base.asset import Asset
 from artemis.reporting.base.asset_type import AssetType
+from artemis.reporting.base.cpe import extract_cpe
 from artemis.reporting.base.language import Language
 from artemis.reporting.base.normal_form import NormalForm, get_domain_normal_form
 from artemis.reporting.base.report import Report
@@ -29,6 +32,65 @@ SEVERITY_OVERRIDES = {
     "http/exposures/logs/": "medium",
     "http/misconfiguration/server-status.yaml": "medium",
 }
+
+ADDITIONAL_REFERENCES: dict[tuple[Language, str], list[str]] = {
+    (
+        Language.pl_PL,  # type: ignore
+        "dast/vulnerabilities/sqli/sqli-error-based.yaml",
+    ): ["https://wiedza.cert.pl/odpornosc-infrastruktury/bezpieczenstwo-webowe/sql-injection/"],
+    (
+        Language.pl_PL,  # type: ignore
+        "dast/vulnerabilities/sqli/time-based-sqli.yaml",
+    ): ["https://wiedza.cert.pl/odpornosc-infrastruktury/bezpieczenstwo-webowe/sql-injection/"],
+    (
+        Language.pl_PL,  # type: ignore
+        "dast/vulnerabilities/xss/reflected-xss.yaml",
+    ): ["https://wiedza.cert.pl/odpornosc-infrastruktury/bezpieczenstwo-webowe/cross-site-scripting/"],
+    (
+        Language.pl_PL,  # type: ignore
+        "dast/vulnerabilities/lfi/linux-lfi-fuzz.yaml",
+    ): ["https://wiedza.cert.pl/odpornosc-infrastruktury/bezpieczenstwo-webowe/file-inclusion/"],
+    (
+        Language.pl_PL,  # type: ignore
+        "dast/vulnerabilities/lfi/windows-lfi-fuzz.yaml",
+    ): ["https://wiedza.cert.pl/odpornosc-infrastruktury/bezpieczenstwo-webowe/file-inclusion/"],
+    (
+        Language.pl_PL,  # type: ignore
+        "dast/vulnerabilities/lfi/lfi-keyed.yaml",
+    ): ["https://wiedza.cert.pl/odpornosc-infrastruktury/bezpieczenstwo-webowe/file-inclusion/"],
+    (
+        Language.pl_PL,  # type: ignore
+        "dast/vulnerabilities/redirect/open-redirect-bypass.yaml",
+    ): ["https://wiedza.cert.pl/odpornosc-infrastruktury/bezpieczenstwo-webowe/open-redir/"],
+    (
+        Language.pl_PL,  # type: ignore
+        "artemis/modules/data/nuclei_templates_custom/open-redirect-simplified.yaml",
+    ): ["https://wiedza.cert.pl/odpornosc-infrastruktury/bezpieczenstwo-webowe/open-redir/"],
+}
+
+
+def _get_cpe(vulnerability: Dict[str, Any]) -> Optional[str]:
+    """Returns the CPE of the software the Nuclei template matched, if the template provides one.
+
+    Nuclei templates may contain it in the info.classification.cpe field, e.g.:
+
+        info:
+          classification:
+            cpe: cpe:2.3:a:wordpress:wordpress:*:*:*:*:*:*:*:*
+
+    When a template doesn't describe a concrete piece of software, None is returned.
+    """
+    info = vulnerability.get("info", None)
+
+    if not isinstance(info, dict):
+        return None
+
+    classification = info.get("classification", None)
+
+    if not isinstance(classification, dict):
+        return None
+
+    return extract_cpe(classification.get("cpe", None))
 
 
 class NucleiReporter(Reporter):
@@ -74,7 +136,7 @@ class NucleiReporter(Reporter):
             url_parsed = urllib.parse.urlparse(url)
             return not url_parsed.query and not url_parsed.fragment
 
-        if task_result["headers"]["receiver"] != "nuclei":
+        if task_result["headers"]["receiver"] != "nuclei" and task_result["headers"]["receiver"] != "nuclei-module":
             return []
 
         if not isinstance(task_result["result"], list):
@@ -159,6 +221,8 @@ class NucleiReporter(Reporter):
                     if original_template_name.startswith(prefix):
                         severity = severity_override
 
+                additional_references: list[str] = ADDITIONAL_REFERENCES.get((language, original_template_name), [])
+
                 result.append(
                     Report(
                         top_level_target=get_top_level_target(task_result),
@@ -174,7 +238,7 @@ class NucleiReporter(Reporter):
                             "description_translated": NucleiReporter._translate_description(
                                 template, description, language
                             ),
-                            "reference": vulnerability["info"].get("reference", []),
+                            "reference": vulnerability["info"].get("reference", []) + additional_references,
                             "severity": severity,
                             "matched_at": matched_at,
                             "template_name": template,
@@ -238,7 +302,7 @@ class NucleiReporter(Reporter):
 
     @staticmethod
     def get_assets(task_result: Dict[str, Any]) -> List[Asset]:
-        if task_result["headers"]["receiver"] != "nuclei":
+        if task_result["headers"]["receiver"] != "nuclei" and task_result["headers"]["receiver"] != "nuclei-module":
             return []
 
         if not isinstance(task_result["result"], list):
@@ -264,6 +328,11 @@ class NucleiReporter(Reporter):
             panel = template.removeprefix(EXPOSED_PANEL_TEMPLATE_PATH_PREFIX).removesuffix(".yaml")
 
             result.append(
-                Asset(asset_type=AssetType.EXPOSED_PANEL, name=vulnerability["matched-at"], additional_type=panel)
+                Asset(
+                    asset_type=AssetType.EXPOSED_PANEL,
+                    name=vulnerability["matched-at"],
+                    additional_type=panel,
+                    cpe=_get_cpe(vulnerability),
+                )
             )
         return result

@@ -44,7 +44,7 @@ class ShodanVulns(ArtemisBase):
             status = TaskStatus.OK
             status_reason = None
 
-        self.db.save_task_result(task=current_task, status=status, status_reason=status_reason, data=result)
+        self.save_task_result(task=current_task, status=status, status_reason=status_reason, data=result)
 
     def run(self, current_task: Task) -> None:
         ip = current_task.get_payload(TaskType.IP)
@@ -55,7 +55,7 @@ class ShodanVulns(ArtemisBase):
 
 if __name__ == "__main__":
     if Config.Modules.Shodan.SHODAN_API_KEY:
-        ShodanVulns().loop()
+        ShodanVulns.parallel_loop()
     else:
         no_api_key_message_printed_filename = "/.no-api-key-message-shown"
 
@@ -65,5 +65,5 @@ if __name__ == "__main__":
             LOGGER.error("Shodan API key is required to start the Shodan vulnerability module.")
             LOGGER.error("Don't worry - all other modules can be used without this API key.")
 
-            with open(no_api_key_message_printed_filename, "w"):
+            with open(no_api_key_message_printed_filename, "w", encoding="utf-8"):
                 pass

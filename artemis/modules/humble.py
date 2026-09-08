@@ -92,7 +92,7 @@ class Humble(ArtemisBase):
 
     def run(self, current_task: Task) -> None:
         if Config.Miscellaneous.CUSTOM_USER_AGENT:
-            with open("/humble/additional/user_agents.txt", "w") as f:
+            with open("/humble/additional/user_agents.txt", "w", encoding="utf-8") as f:
                 f.write(f"1.- {Config.Miscellaneous.CUSTOM_USER_AGENT}\n")
         else:
             # Reset back to the original content
@@ -141,7 +141,7 @@ class Humble(ArtemisBase):
             status = TaskStatus.OK
             status_reason = None
 
-        self.db.save_task_result(
+        self.save_task_result(
             task=current_task,
             status=status,
             status_reason=status_reason,
@@ -154,4 +154,4 @@ class Humble(ArtemisBase):
 
 
 if __name__ == "__main__":
-    Humble().loop()
+    Humble.parallel_loop()

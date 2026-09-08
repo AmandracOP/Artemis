@@ -38,7 +38,7 @@ class Example(ArtemisBase):
             status = TaskStatus.OK
             status_reason = "The URL has odd number of characters."
 
-        self.db.save_task_result(
+        self.save_task_result(
             task=current_task,
             status=status,
             status_reason=status_reason,
@@ -49,4 +49,4 @@ class Example(ArtemisBase):
 
 
 if __name__ == "__main__":
-    Example().loop()
+    Example.parallel_loop()

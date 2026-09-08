@@ -41,7 +41,7 @@ class DeviceIdentifier(ArtemisBase):
         )
         self.add_task(current_task, new_task)
 
-        self.db.save_task_result(task=current_task, status=TaskStatus.OK, data=device)
+        self.save_task_result(task=current_task, status=TaskStatus.OK, data=device)
 
     def run(self, current_task: Task) -> None:
         url = get_target_url(current_task)
@@ -54,4 +54,4 @@ class DeviceIdentifier(ArtemisBase):
 
 
 if __name__ == "__main__":
-    DeviceIdentifier().loop()
+    DeviceIdentifier.parallel_loop()

@@ -1,5 +1,6 @@
 import copy
 import dataclasses
+import functools
 import json
 import os
 import ssl
@@ -18,16 +19,24 @@ LOGGER = build_logger(__name__)
 # As our goal in Artemis is to access the sites in order to test their security, let's
 # enable SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION in order to make a connection even if it's
 # not secure.
+#
+# Building the SSL context loads and parses the whole system CA bundle and the result is
+# identical for every request. We therefore build it once at import time instead of on
+# every mount() - in modules that make thousands of requests this otherwise burns a lot
+# of CPU re-parsing the same certificates.
+SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION = 1 << 18
+
+_SSL_CONTEXT = ssl.create_default_context()
+_SSL_CONTEXT.check_hostname = False
+_SSL_CONTEXT.options |= SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION
+# Shared across all sessions and threads - treat as read-only after this point.
+# Never mutate it per-request (e.g. load_verify_locations / set_ciphers), or the
+# change would leak into every other caller.
+
+
 class SSLContextAdapter(requests.adapters.HTTPAdapter):
     def init_poolmanager(self, *args, **kwargs):  # type: ignore
-        context = ssl.create_default_context()
-
-        SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION = 1 << 18
-
-        context.check_hostname = False
-        context.options |= SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION
-
-        kwargs["ssl_context"] = context
+        kwargs["ssl_context"] = _SSL_CONTEXT
         return super().init_poolmanager(*args, **kwargs)  # type: ignore
 
 
@@ -58,8 +67,10 @@ class HTTPResponse:
     def text(self) -> str:
         return self.content
 
-    @property
+    @functools.cached_property
     def content(self) -> str:
+        # Computed once per response and cached: callers read .content several times
+        # and re-decoding the content bytes on each access is pure waste.
         if self.encoding and self.encoding != "binary":
             return self.content_bytes.decode(self.encoding, errors="ignore")
         else:
@@ -76,6 +87,7 @@ def request(
     session: Optional[requests.Session] = None,
     max_size: int = Config.Miscellaneous.CONTENT_PREFIX_SIZE,
     requests_per_second: float = Config.Limits.REQUESTS_PER_SECOND,
+    timeout: Optional[float] = None,
     **kwargs: Any,
 ) -> HTTPResponse:
     if "RUNNING_TESTS" in os.environ:
@@ -94,7 +106,11 @@ def request(
             session = requests.Session()
         url_parsed = urllib.parse.urlparse(url)
         if url_parsed.scheme.lower() == "https":
-            session.mount(url, SSLContextAdapter())
+            # Mount once per session (keyed by the "https://" prefix). This previously ran on
+            # every request, rebuilding the adapter - and the SSL context - each time, which
+            # defeated connection reuse for callers that pass a shared session.
+            if not isinstance(session.adapters.get("https://"), SSLContextAdapter):
+                session.mount("https://", SSLContextAdapter())
 
         if url_parsed.username or url_parsed.password:
             LOGGER.debug(
@@ -112,28 +128,31 @@ def request(
             cookies=cookies,
             verify=False,
             stream=True,
-            timeout=Config.Limits.REQUEST_TIMEOUT_SECONDS,
+            timeout=timeout if timeout is not None else Config.Limits.REQUEST_TIMEOUT_SECONDS,
             headers=headers,
         )
 
-        # Handling situations where the response is very long, which is not handled by requests timeout
-        result = b""
-        # Sometimes the returned chunks are significantly shorter than max_size, therefore we iterate until
-        # we run out of chunks or we complete a result of expected size.
-        for item in response.iter_content(max_size):
-            result += item
+        try:
+            # Handling situations where the response is very long, which is not handled by requests timeout
+            result = b""
+            # Sometimes the returned chunks are significantly shorter than max_size, therefore we iterate until
+            # we run out of chunks or we complete a result of expected size.
+            for item in response.iter_content(max_size):
+                result += item
 
-            if len(result) >= max_size:
-                break
+                if len(result) >= max_size:
+                    break
 
-        return HTTPResponse(
-            status_code=response.status_code,
-            content_bytes=result[:max_size],
-            encoding=response.encoding if response.encoding else "utf-8",
-            is_redirect=bool(response.history),
-            url=response.url,
-            headers=response.headers,
-        )
+            return HTTPResponse(
+                status_code=response.status_code,
+                content_bytes=result[:max_size],
+                encoding=response.encoding if response.encoding else "utf-8",
+                is_redirect=bool(response.history),
+                url=response.url,
+                headers=response.headers,
+            )
+        finally:
+            response.close()
 
     return throttle_request(_internal_request, requests_per_second)  # type: ignore
 

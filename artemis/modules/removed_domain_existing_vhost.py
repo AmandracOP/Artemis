@@ -78,12 +78,12 @@ class RemovedDomainExistingVhost(ArtemisBase):
         domain = current_task.get_payload("domain")
 
         if self.check_domain_exists(domain):
-            self.db.save_task_result(task=current_task, status=TaskStatus.OK, status_reason="Domain exists")
+            self.save_task_result(task=current_task, status=TaskStatus.OK, status_reason="Domain exists")
             return
 
         target_ips = self._obtain_past_target_ips(domain)
         if not target_ips:
-            self.db.save_task_result(
+            self.save_task_result(
                 task=current_task, status=TaskStatus.OK, status_reason="Unable to obtain past target ips"
             )
             return
@@ -136,7 +136,7 @@ class RemovedDomainExistingVhost(ArtemisBase):
                     and ratio
                     < Config.Modules.RemovedDomainExistingVhost.REMOVED_DOMAIN_EXISTING_VHOST_SIMILARITY_THRESHOLD
                 ):
-                    self.db.save_task_result(
+                    self.save_task_result(
                         task=current_task,
                         status=TaskStatus.INTERESTING,
                         status_reason=f"Detected that {ip} hosts nonexistent domain {domain}",
@@ -149,7 +149,7 @@ class RemovedDomainExistingVhost(ArtemisBase):
                         },
                     )
                     return
-        self.db.save_task_result(
+        self.save_task_result(
             task=current_task,
             status=TaskStatus.OK,
             status_reason=f"Didn't detect that any of ips: {target_ips} host {domain}",
@@ -158,7 +158,7 @@ class RemovedDomainExistingVhost(ArtemisBase):
 
 if __name__ == "__main__":
     if Config.Modules.RemovedDomainExistingVhost.REMOVED_DOMAIN_EXISTING_VHOST_PASSIVEDNS_URLS:
-        RemovedDomainExistingVhost().loop()
+        RemovedDomainExistingVhost.parallel_loop()
     else:
         no_pdns_config_message_printed_filename = "/.no-pdns-config-message-shown"
 
@@ -170,5 +170,5 @@ if __name__ == "__main__":
             )
             LOGGER.error("Don't worry - all other modules can be used.")
 
-            with open(no_pdns_config_message_printed_filename, "w"):
+            with open(no_pdns_config_message_printed_filename, "w", encoding="utf-8"):
                 pass
